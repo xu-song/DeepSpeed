@@ -303,7 +303,6 @@ def _zero2_merge_trainable_params(state_dict, world_size, fp32_flat_groups, zero
             if debug:
                 print(f"{name} full shape: {shape} unpartitioned numel {unpartitioned_numel} ")
             state_dict[name] = full_single_fp32_vector.narrow(0, offset, unpartitioned_numel).view(shape)
-            # tensor = GatheredTensor(fp32_flat_groups, offset, partitioned_numel, shape)
             offset += unpartitioned_numel
 
         # Z2 started to align to 2*world_size to improve nccl performance. Therefore both offset and
@@ -434,16 +433,24 @@ class GatheredTensor:
                 tensor_slice.append(flat_tensor[start_offset:end_offset])
 
             pad_flat_param_chunks.append(torch.concat(tensor_slice, 0))
-        pad_flat_param = torch.cat(pad_flat_param_chunks, dim=0).to(torch.float16)
+        pad_flat_param = torch.cat(pad_flat_param_chunks, dim=0)
         param = pad_flat_param[:self.shape.numel()].view(self.shape).contiguous()
         return param
 
     # The following part make it compatible with `huggingface_hub.split_torch_state_dict_into_shards`
-    # https://github.com/huggingface/huggingface_hub/blob/src/huggingface_hub/serialization/_torch.py
+    # https://github.com/huggingface/huggingface_hub/blob/v0.26.1/src/huggingface_hub/serialization/_torch.py#L335
+    # 1. get_torch_storage_id 
+    #   tensor.storage().data_ptr() is part of torch_storage_id
+    #   refer to https://github.com/huggingface/huggingface_hub/blob/v0.26.1/src/huggingface_hub/serialization/_torch.py#L385
+    # 2. get_torch_storage_size
+    #    tensor.zize() is called by get_torch_storage_size
     def storage(self):
         return self
 
     def data_ptr(self):
+        """
+        a naive implemtation of storage id, can be optimized.
+        """
         return self.offset * 100000 + self.partitioned_numel
 
     def size(self):
